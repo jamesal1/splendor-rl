@@ -1,11 +1,17 @@
 import torch
 from torch.utils.cpp_extension import load
-import os
-os.environ["CC"] = "/usr/bin/gcc-7"
-os.environ["CXX"] = "/usr/bin/g++-7"
+# import os
+# os.environ["CC"] = "/usr/bin/gcc-7"
+# os.environ["CXX"] = "/usr/bin/g++-7"
+game_cpp = load(name="game_cpp", sources=["game.cpp"])
+# import game_cpp
 
+a = torch.zeros([2,492],dtype=torch.int8).cuda()
 
-lltm_cpp = load(name="game_cpp", sources=["game.cpp"])
+b=a.cpu()
+game_cpp.advance(b,b)
+print(a)
+print(b)
 
-print(torch.Tensor.eye(2))
-torch.zeros([2,2],dtype=torch.uint8)
+import time
+time.sleep(100)
