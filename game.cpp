@@ -3,9 +3,10 @@
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
+#include <experimental/iterator>
+#include <random>
 
-
-
+typedef std::vector<std::vector<int>> Array2d;
 
 //Level,Wcost,Ucost,Gcost,Rcost,Acost,Points,W,U,G,R,A
 const int LEVEL = 0;
@@ -169,32 +170,107 @@ const int RESERVE_TOP_END = 124;
 const int PURCHASE_START = 124;
 const int PURCHASE_END = 214;
 
-/*std::vector<int> DECK_1{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,
+std::vector<int> DECK_1{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,
 20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39};
 std::vector<int> DECK_2{40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69};
 std::vector<int> DECK_3{70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89};
-*/
+
 
 
 signed char NOBLE_INFO [10][5]= {
-{4,4,0,0,0},
-{0,4,4,0,0},
-{0,0,4,4,0},
-{0,0,0,4,4},
-{4,0,0,0,4},
+{3,3,0,0,3},
 {3,3,3,0,0},
 {0,3,3,3,0},
 {0,0,3,3,3},
 {3,0,0,3,3},
-{3,3,0,0,3}};
+{4,0,0,0,4},
+{4,4,0,0,0},
+{0,4,4,0,0},
+{0,0,4,4,0},
+{0,0,0,4,4}};
 
-std::vector<int>** init_decks(int num) {
-    std::vector<int> **decks;
+//struct vector_array {
+//    std::vector<int> array;
+//    int length;
+//};
+
+
+Array2d init_decks(int num, unsigned seed) {
+    std::mt19937 rng(seed);
+    Array2d decks;
+    for (int i = 0; i < num; i++) {
+        decks.push_back(DECK_1);
+        std::shuffle (decks.back().begin(), decks.back().end(), rng);
+        decks.push_back(DECK_2);
+        std::shuffle (decks.back().begin(), decks.back().end(), rng);
+        decks.push_back(DECK_3);
+        std::shuffle (decks.back().begin(), decks.back().end(), rng);
+    }
+
+    return decks;
+}
+
+std::vector<int>* get_test_vector() {
+    std::vector<int> *vects = new std::vector<int>[1];
+    vects[0]=std::vector<int>{1,2};
+    printf("okay\n");
+    printf("%d\n",vects[0].back());
+    return vects;
+}
+
+int test_vector (Array2d deck, int length) {
+//    deck = init_decks(length);
+    for (int i = 0; i < length;i++ ){
+        printf("%d %d\n",i,deck.at(i).back());
+
+    }
+    return 0;
+}
+
+void init_states(torch::Tensor states, Array2d decks, int start_score, unsigned seed) {
+    std::mt19937 rng(seed + 1);
+    std::uniform_int_distribution<int> random10(0,9);
+    std::uniform_int_distribution<int> random9(1,9);
+    std::uniform_int_distribution<int> random8(2,9);
+    auto statesd = states.accessor<signed char,2>();
+
+    for (int i = 0; i< statesd.size(0); i++) {
+        auto state = statesd[i];
+        auto deck_1 = decks.at(3 * i);
+        auto deck_2 = decks.at(3 * i + 1);
+        auto deck_3 = decks.at(3 * i + 2);
+        state[PLAY + deck_1.back()] = 1; deck_1.pop_back();
+        state[PLAY + deck_1.back()] = 1; deck_1.pop_back();
+        state[PLAY + deck_1.back()] = 1; deck_1.pop_back();
+        state[PLAY + deck_1.back()] = 1; deck_1.pop_back();
+        state[PLAY + deck_2.back()] = 1; deck_2.pop_back();
+        state[PLAY + deck_2.back()] = 1; deck_2.pop_back();
+        state[PLAY + deck_2.back()] = 1; deck_2.pop_back();
+        state[PLAY + deck_2.back()] = 1; deck_2.pop_back();
+        state[PLAY + deck_3.back()] = 1; deck_3.pop_back();
+        state[PLAY + deck_3.back()] = 1; deck_3.pop_back();
+        state[PLAY + deck_3.back()] = 1; deck_3.pop_back();
+        state[PLAY + deck_3.back()] = 1; deck_3.pop_back();
+        state[TOP + deck_1.back()] = 1;
+        state[TOP + deck_2.back()] = 1;
+        state[TOP + deck_3.back()] = 1;
+        state[PLAYER_1 + SCORE] = start_score;
+        state[PLAYER_2 + SCORE] = start_score;
+        auto first_noble = random10(rng);
+        auto second_noble = (first_noble + random9(rng)) % 10;
+        auto third_noble = (first_noble + random8(rng)) % 10;
+        if (third_noble == second_noble) {
+            third_noble = (first_noble + 1) % 10;
+        }
+        state[NOBLES + first_noble] = 1;
+        state[NOBLES + second_noble] = 1;
+        state[NOBLES + third_noble] = 1;
+    }
 }
 
 
-void advance(torch::Tensor states, int test,  torch::Tensor actions, torch::Tensor discards, torch::Tensor nobles) {
-    std::vector<int> **decks;
+
+void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::Tensor discards, torch::Tensor nobles) {
     auto statesd = states.accessor<signed char,2>();
     auto actionsd = actions.accessor<unsigned char,1>();
     auto discardsd = discards.accessor<signed char,2>();
@@ -233,7 +309,7 @@ void advance(torch::Tensor states, int test,  torch::Tensor actions, torch::Tens
                 replace_card = card;
             } else {
                 int level = action - RESERVE_TOP_START;
-                deck = decks[i][level];
+                deck = decks.at(3 * i + level);
                 if (deck.size()) {
                     card = deck.back();
                     replace_top = card;
@@ -286,6 +362,7 @@ void advance(torch::Tensor states, int test,  torch::Tensor actions, torch::Tens
             }
             state[player_offset + SCORE] += card_info[POINTS];
             state[player_offset + GOLD] -= gold_cost;
+            state[DEAD + card] = 1;
             if (state[player_offset + GOLD] < 0) {
                 state[RESULT] = player ? 2:-2;
             }
@@ -293,7 +370,7 @@ void advance(torch::Tensor states, int test,  torch::Tensor actions, torch::Tens
 
         if (replace_card>-1) {
             int level = replace_card < L1_END ? 0 : replace_card < L2_END ? 1 : 2;
-            deck = decks[i][level];
+            deck = decks.at(3 * i + level);
             state[PLAY + replace_card] = 0;
             if (deck.size()) {
                 state[PLAY + deck.back()] = 1;
@@ -389,13 +466,16 @@ void advance(torch::Tensor states, int test,  torch::Tensor actions, torch::Tens
             }
         }
         state[TURN]++;
-
-
     }
 
 }
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("advance", &advance, "advance");
+    m.def("advance", &advance, "advance");
+    m.def("init_decks", &init_decks, "init_decks");
+    m.def("init_states", &init_states, "init_states");
+    m.def("test_vector", &test_vector, "test_vector");
+    m.def("get_test_vector", &get_test_vector, "get_test_vector");
+
 }
