@@ -31,7 +31,7 @@ const int TURN = 400;
 const int TOP = 401;
 const int RESULT = 491;
 
-const int MAX_TURNS = 100;
+const int MAX_TURNS = 1000;
 
 signed char CARD_INFO [90][12]= {
 {1,0,3,0,0,0,0,1,0,0,0,0},
@@ -273,8 +273,8 @@ void init_states(torch::Tensor states, Array2d decks, int start_score, unsigned 
 void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::Tensor discards, torch::Tensor nobles) {
     auto statesd = states.accessor<signed char,2>();
     auto actionsd = actions.accessor<unsigned char,1>();
-    auto discardsd = discards.accessor<signed char,2>();
-    auto noblesd = nobles.accessor<signed char,1>();
+    auto discardsd = discards.accessor<unsigned char,2>();
+    auto noblesd = nobles.accessor<unsigned char,1>();
     int games_updated = 0;
     for (int i = 0; i< statesd.size(0); i++) {
         auto state = statesd[i];
@@ -336,7 +336,7 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
             }
         } else {
             int card = action - PURCHASE_START;
-            if (state[PLAY + replace_card]) {
+            if (state[PLAY + card]) {
                 replace_card = card;
             } else if (state[player_offset + RESERVED + card]) {
                 int level = card < L1_END ? 0 : card < L2_END ? 1 : 2;
@@ -357,8 +357,8 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
                     } else {
                         state[player_offset + CHIPS + color] -= cost;
                     }
-                    state[player_offset + CARDS + color] += card_info[COLOR + color];
                 }
+                state[player_offset + CARDS + color] += card_info[COLOR + color];
             }
             state[player_offset + SCORE] += card_info[POINTS];
             state[player_offset + GOLD] -= gold_cost;
@@ -374,12 +374,13 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
             state[PLAY + replace_card] = 0;
             if (deck.size()) {
                 state[PLAY + deck.back()] = 1;
+                replace_top = deck.back();
             }
-            replace_top = replace_card;
+
         }
 
         if (replace_top>-1) {
-            state[PLAY + replace_top] = 0;
+            state[TOP + replace_top] = 0;
             deck.pop_back();
             if (deck.size()) {
                 state[TOP + deck.back()] = 1;
@@ -394,9 +395,9 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
         auto discard = discardsd[i];
         switch (total_chips) {
             case 13:
-                chip_count = state[player_offset + CHIPS + discard[0]];
+                chip_count = state[player_offset + CHIPS + discard[2]];
                 if (chip_count) {
-                    state[player_offset + CHIPS + discard[0]] = chip_count - 1;
+                    state[player_offset + CHIPS + discard[2]] = chip_count - 1;
                 } else {
                     state[RESULT] = player ? 2:-2;
                 }
@@ -408,9 +409,9 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
                     state[RESULT] = player ? 2:-2;
                 }
             case 11:
-                chip_count = state[player_offset + CHIPS + discard[2]];
+                chip_count = state[player_offset + CHIPS + discard[0]];
                 if (chip_count) {
-                    state[player_offset + CHIPS + discard[2]] = chip_count - 1;
+                    state[player_offset + CHIPS + discard[0]] = chip_count - 1;
                 } else {
                     state[RESULT] = player ? 2:-2;
                 }
@@ -434,7 +435,7 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
                 if (state[NOBLES + nob]) {
                     satisfies = 1;
                     for (int color = 0; color < 5; color++) {
-                        if (state[player_offset + CARDS + color] < NOBLE_INFO[noble][color]) {
+                        if (state[player_offset + CARDS + color] < NOBLE_INFO[nob][color]) {
                             satisfies = 0;
                             break;
                         }
