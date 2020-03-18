@@ -157,7 +157,7 @@ class WSClient(WebSocketClient):
         print("Sent:", json.dumps(msg))
         self.send(payload)
 
-    def create_room(self, score="21", top=True):
+    def create_room(self, score="21", top=False):
         room_config = [{"gameKey":"spendee","numPlayers":2,"numAIPlayers":1,
                         "gameSettings":{"speed":"fast","targetScore":score,"nextCardVisible":top}}]
         self.send_dump({"msg":"method","method":"newRoom","params":room_config, "randomSeed":getRandomLower()})

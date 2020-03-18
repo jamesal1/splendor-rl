@@ -31,7 +31,7 @@ const int TURN = 400;
 const int TOP = 401;
 const int RESULT = 491;
 
-const int MAX_TURNS = 1000;
+const int MAX_TURNS = 100;
 
 signed char CARD_INFO [90][12]= {
 {1,0,3,0,0,0,0,1,0,0,0,0},
@@ -270,17 +270,17 @@ void init_states(torch::Tensor states, Array2d decks, int start_score, unsigned 
 
 
 
-void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::Tensor discards, torch::Tensor nobles) {
+int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::Tensor discards, torch::Tensor nobles) {
     auto statesd = states.accessor<signed char,2>();
     auto actionsd = actions.accessor<unsigned char,1>();
     auto discardsd = discards.accessor<unsigned char,2>();
     auto noblesd = nobles.accessor<unsigned char,1>();
-    int games_updated = 0;
+    int games_unfinished = 0;
     for (int i = 0; i< statesd.size(0); i++) {
         auto state = statesd[i];
         if (state[RESULT]) {
             continue;
-        } games_updated++;
+        }
         int player = (state[TURN] %  2);
         int player_offset = player * PLAYER_2 + (1 - player) * PLAYER_1;
         int replace_card = -1;
@@ -306,7 +306,11 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
             int card;
             if (action < RESERVE_END) {
                 card = action - RESERVE_START;
-                replace_card = card;
+                if (state[PLAY + card]) {
+                    replace_card = card;
+                } else {
+                    state[RESULT] = player ? 2:-2;
+                }
             } else {
                 int level = action - RESERVE_TOP_START;
                 deck = decks.at(3 * i + level);
@@ -315,11 +319,10 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
                     replace_top = card;
                 } else {
                     state[RESULT] = player ? 2:-2;
-                    continue;
                 }
             }
             if (state[player_offset + L1_RESERVED] + state[player_offset + L2_RESERVED] +
-              state[player_offset + L3_RESERVED] < 3 && state[PLAY + card]) {
+              state[player_offset + L3_RESERVED] < 3 ) {
                 state[player_offset + RESERVED + card] = 1;
                 if (card < L1_END) {
                     state[player_offset + L1_RESERVED]++;
@@ -454,7 +457,6 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
             auto p2_score = state[PLAYER_2 + SCORE];
             if (p1_score > 20 || p2_score > 20 || state[TURN] >= MAX_TURNS -  1) {
                 if (p1_score > p2_score) {
-                    state[RESULT] = 1;
                 } else if (p1_score < p2_score) {
                     state[RESULT] = -1;
                 } else {
@@ -462,13 +464,22 @@ void advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch:
                     for (int color = 0; color < 5; color++) {
                         card_dif += state[PLAYER_1 + CARDS + color] - state[PLAYER_2 + CARDS + color];
                     }
-                    state[RESULT] = card_dif > 0 ? -1 : card_dif < 0 ? 1 : 3;
+                    if (state[TURN] >= MAX_TURNS -  1) {
+                        state[RESULT] = card_dif > 0 ? 1 : card_dif < 0 ? -1 : 3;
+                    } else {
+                        state[RESULT] = card_dif > 0 ? -1 : card_dif < 0 ? 1 : 3;
+                    }
                 }
             }
         }
         state[TURN]++;
-    }
 
+        if (state[RESULT]==0) {
+            games_unfinished++;
+        }
+
+    }
+    return games_unfinished;
 }
 
 
