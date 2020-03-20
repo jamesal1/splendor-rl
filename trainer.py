@@ -30,7 +30,7 @@ class Trainer():
             dst = os.path.join(self.log_dir, f)
             shutil.copyfile(src, dst)
         self.model = my_model
-        self.noise_scale = kwargs.get("noise_scale", 1e-3)
+        self.noise_scale = kwargs.get("noise_scale", 1e-2)
         # self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 1e-3)
         self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 0)
         self.lr = kwargs.get("lr", 1e-3)
@@ -39,12 +39,17 @@ class Trainer():
         self.epochs = kwargs.get("epochs", 1000)
         self.batches_per_epoch = kwargs.get("batches_per_epoch",100)
         self.batch_size = kwargs.get("batch_size",128)
+        self.half = kwargs.get("half", 0)
 
     def train(self):
         perturbed_model = type(self.model)().cuda()
         noise_model = type(self.model)().cuda()
+        if self.half:
+            self.model = self.model.half()
+            perturbed_model = perturbed_model.half()
+            noise_model = noise_model.half()
         ave_delta = .1
-        opt = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        opt = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 1e-2)
         # opt = torch.optim.SGD(self.model.parameters(), lr=self.lr)
 
 
@@ -88,6 +93,8 @@ class Trainer():
 
                 self.noise_scale *= self.noise_scale_decay
                 opt.step()
+            for param in self.model.parameters():
+                print ((param.data**2).mean())
             print("Average Reward:", total_reward / (2 * self.batches_per_epoch))
             print("Average Game Length:", total_game_length.float() / (2 * self.batches_per_epoch * self.batch_size))
             print("Average Points:", total_points.float() / (2 * self.batches_per_epoch * self.batch_size))

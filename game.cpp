@@ -31,6 +31,7 @@ const int TURN = 400;
 const int TOP = 401;
 const int RESULT = 491;
 
+const int FIRST_CARD = 16;
 const int MAX_TURNS = 100;
 
 signed char CARD_INFO [90][12]= {
@@ -282,6 +283,7 @@ int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::
             continue;
         }
         int player = (state[TURN] %  2);
+        state[TURN]++;
         int player_offset = player * PLAYER_2 + (1 - player) * PLAYER_1;
         int replace_card = -1;
         int replace_top = -1;
@@ -455,24 +457,30 @@ int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::
         if (player && state[RESULT] == 0) {
             auto p1_score = state[PLAYER_1 + SCORE];
             auto p2_score = state[PLAYER_2 + SCORE];
-            if (p1_score > 20 || p2_score > 20 || state[TURN] >= MAX_TURNS -  1) {
+
+            int p1_cards = 0;
+            int p2_cards = 0;
+            for (int color = 0; color < 5; color++) {
+             p1_cards += state[PLAYER_1 + CARDS + color];
+             p2_cards += state[PLAYER_2 + CARDS + color];
+            }
+//            auto stalemate = state[TURN] > MAX_TURNS -  1 || (state[TURN] > FIRST_CARD && p1_cards == 0 || p2_cards == 0);
+            auto stalemate = state[TURN] > MAX_TURNS -  1 ;
+            if (p1_score > 20 || p2_score > 20 || stalemate) {
                 if (p1_score > p2_score) {
+                    state[RESULT] = 1;
                 } else if (p1_score < p2_score) {
                     state[RESULT] = -1;
                 } else {
-                    int card_dif = 0;
-                    for (int color = 0; color < 5; color++) {
-                        card_dif += state[PLAYER_1 + CARDS + color] - state[PLAYER_2 + CARDS + color];
-                    }
-                    if (state[TURN] >= MAX_TURNS -  1) {
-                        state[RESULT] = card_dif > 0 ? 1 : card_dif < 0 ? -1 : 3;
+                    if (stalemate) {
+                        state[RESULT] = p1_cards > p2_cards ? 1 : p1_cards < p2_cards ? -1 : 4;
                     } else {
-                        state[RESULT] = card_dif > 0 ? -1 : card_dif < 0 ? 1 : 3;
+                        state[RESULT] = p1_cards > p2_cards ? -1 : p1_cards < p2_cards ? 1 : 3;
                     }
                 }
             }
         }
-        state[TURN]++;
+
 
         if (state[RESULT]==0) {
             games_unfinished++;
