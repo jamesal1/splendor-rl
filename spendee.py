@@ -157,7 +157,7 @@ class WSClient(WebSocketClient):
         print("Sent:", json.dumps(msg))
         self.send(payload)
 
-    def create_room(self, score="21", top=False):
+    def create_room(self, score="21", top=True):
         room_config = [{"gameKey":"spendee","numPlayers":2,"numAIPlayers":1,
                         "gameSettings":{"speed":"fast","targetScore":score,"nextCardVisible":top}}]
         self.send_dump({"msg":"method","method":"newRoom","params":room_config, "randomSeed":getRandomLower()})
@@ -187,13 +187,13 @@ def parseState(data):
             state[player_offset + CHIPS + color] = count
         state[player_offset + GOLD] = player["goldChips"]
         for card in player["purchasedCards"]:
-            state[player_offset + SCORE] += card_table[card][POINTS]
+            state[player_offset + SCORE] += CARD_INFO[card][POINTS]
             for color in range(5):
-                state[player_offset + CARDS + color] += card_table[card][COLOR + color]
+                state[player_offset + CARDS + color] += CARD_INFO[card][COLOR + color]
             state[DEAD + card] = 1
         for card in player["reservedCards"]:
             state[player_offset + RESERVED + card] = 1
-            level = card_table[card][LEVEL]
+            level = CARD_INFO[card][LEVEL]
             state[player_offset + L1_RESERVED - 1 + level] += 1
         state[player_offset + SCORE] += 3 * len(player["nobles"])
         player_offset = PLAYER_2

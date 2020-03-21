@@ -32,7 +32,7 @@ const int TOP = 401;
 const int RESULT = 491;
 
 const int FIRST_CARD = 16;
-const int MAX_TURNS = 100;
+const int MAX_TURNS = 90;
 
 signed char CARD_INFO [90][12]= {
 {1,0,3,0,0,0,0,1,0,0,0,0},
@@ -310,6 +310,7 @@ int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::
                 card = action - RESERVE_START;
                 if (state[PLAY + card]) {
                     replace_card = card;
+                    state[DEAD + card] = 1;
                 } else {
                     state[RESULT] = player ? 2:-2;
                 }
@@ -464,7 +465,7 @@ int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::
              p1_cards += state[PLAYER_1 + CARDS + color];
              p2_cards += state[PLAYER_2 + CARDS + color];
             }
-//            auto stalemate = state[TURN] > MAX_TURNS -  1 || (state[TURN] > FIRST_CARD && p1_cards == 0 || p2_cards == 0);
+//            auto stalemate = state[TURN] > MAX_TURNS -  1 || (state[TURN] > FIRST_CARD && (p1_cards == 0 || p2_cards == 0));
             auto stalemate = state[TURN] > MAX_TURNS -  1 ;
             if (p1_score > 20 || p2_score > 20 || stalemate) {
                 if (p1_score > p2_score) {

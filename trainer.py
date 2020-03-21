@@ -33,11 +33,11 @@ class Trainer():
         self.noise_scale = kwargs.get("noise_scale", 1e-2)
         # self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 1e-3)
         self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 0)
-        self.lr = kwargs.get("lr", 1e-3)
+        self.lr = kwargs.get("lr", 1e-4)
         # self.lr_decay = kwargs.get("lr_decay", 1e-2)
         self.ave_delta_rate = kwargs.get("ave_delta_rate", .999)
         self.epochs = kwargs.get("epochs", 1000)
-        self.batches_per_epoch = kwargs.get("batches_per_epoch",100)
+        self.batches_per_epoch = kwargs.get("batches_per_epoch",10)
         self.batch_size = kwargs.get("batch_size",128)
         self.half = kwargs.get("half", 0)
 
@@ -55,9 +55,10 @@ class Trainer():
 
 
         for epoch in range(self.epochs):
-            total_reward = 0
-            total_game_length = 0
-            total_points = 0
+            total_reward = 0.0
+            total_game_length = 0.0
+            total_cards = 0.0
+            total_points = 0.0
             for _ in trange(self.batches_per_epoch):
                 perturbed_model.load_state_dict(self.model.state_dict())
                 perturbed_player = random.randrange(2)
@@ -71,17 +72,18 @@ class Trainer():
                         n_param.data.normal_(std=self.noise_scale)
                         p_param.add_(n_param.data)
 
-                    add_result, add_turns, add_points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
+                    add_result, add_turns, add_cards, add_points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
 
                     add_score = add_result[perturbed_player].sum()/self.batch_size
                     for p_param, n_param in zip(perturbed_model.parameters(), noise_model.parameters()):
                         p_param.sub_(2 * n_param.data)
 
-                    sub_result, sub_turns, sub_points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
+                    sub_result, sub_turns, sub_cards, sub_points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
                     sub_score = sub_result[perturbed_player].sum()/self.batch_size
                     total_reward += add_score + sub_score
 
                     total_game_length += add_turns.sum() + sub_turns.sum()
+                    total_cards += add_cards + sub_cards
                     total_points += add_points + sub_points
                     reward_delta = sub_score - add_score
 
@@ -89,16 +91,17 @@ class Trainer():
                     ave_delta = self.ave_delta_rate * ave_delta + (1 - self.ave_delta_rate) * abs(reward_delta)
 
                 for param, n_param in zip(self.model.parameters(), noise_model.parameters()):
-                    param.grad = (step_size * n_param.data)
+                    param.grad = ((step_size / self.noise_scale) * n_param.data)
 
                 self.noise_scale *= self.noise_scale_decay
                 opt.step()
-            for param in self.model.parameters():
-                print ((param.data**2).mean())
+            # for param in self.model.parameters():
+            #     print ((param.data**2).mean())
             print("Average Reward:", total_reward / (2 * self.batches_per_epoch))
             print("Average Game Length:", total_game_length.float() / (2 * self.batches_per_epoch * self.batch_size))
+            print("Average Cards:", total_cards.float() / (2 * self.batches_per_epoch * self.batch_size))
             print("Average Points:", total_points.float() / (2 * self.batches_per_epoch * self.batch_size))
-            fname = os.path.join(self.checkpoints_dir,"epoch_"+str(epoch)+".pkl")
+            fname = os.path.join(self.checkpoints_dir, "epoch_"+str(epoch)+".pkl")
             torch.save(self.model, fname)
 
 
@@ -117,4 +120,5 @@ def no_grad_test():
 
 
 if __name__ == "__main__":
-    Trainer(model.DenseNet().cuda()).train()
+    Trainer(model.TransformerNet().cuda()).train()
+    # Trainer(model.DenseNet().cuda()).train()
