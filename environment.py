@@ -24,6 +24,7 @@ def get_view(states,turn,top=False):
 def parse_results(results):
     ret1 = []
     ret2 = []
+    # print(results)
     for r in results:
         if r == 1:
             ret1 += [1.]

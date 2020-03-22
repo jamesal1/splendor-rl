@@ -34,15 +34,15 @@ class RandomPlayer(Player):
 
     def get_move(self,job,state,deck):
         # return [PASS,0,0]
-        if self.current_state != None and job == "SPENDEE_REGULAR":
-            if self.expected_state !=state:
-                print("State mismatch:")
-                print(self.expected_state)
-                print(state)
-                for i in range(len(state)):
-                    if state[i]!=self.expected_state[i]:
-                        print(i,state[i],self.expected_state[i])
-                exit()
+        # if self.current_state != None and job == "SPENDEE_REGULAR":
+        #     if self.expected_state !=state:
+        #         print("State mismatch:")
+        #         print(self.expected_state)
+        #         print(state)
+        #         for i in range(len(state)):
+        #             if state[i]!=self.expected_state[i]:
+        #                 print(i,state[i],self.expected_state[i])
+                # exit()
 
 
 

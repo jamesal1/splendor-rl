@@ -6,8 +6,8 @@ import shutil
 import torch
 import environment
 import random
-random.seed(0)
-torch.manual_seed(0)
+random.seed(1)
+torch.manual_seed(1)
 
 
 cuda_device = torch.device("cuda")
@@ -30,7 +30,7 @@ class Trainer():
             dst = os.path.join(self.log_dir, f)
             shutil.copyfile(src, dst)
         self.model = my_model
-        self.noise_scale = kwargs.get("noise_scale", 1e-2)
+        self.noise_scale = kwargs.get("noise_scale", 1e-7)
         # self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 1e-3)
         self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 0)
         self.lr = kwargs.get("lr", 1e-4)
@@ -38,7 +38,7 @@ class Trainer():
         self.ave_delta_rate = kwargs.get("ave_delta_rate", .999)
         self.epochs = kwargs.get("epochs", 1000)
         self.batches_per_epoch = kwargs.get("batches_per_epoch",10)
-        self.batch_size = kwargs.get("batch_size",128)
+        self.batch_size = kwargs.get("batch_size",16)
         self.half = kwargs.get("half", 0)
 
     def train(self):
@@ -49,8 +49,8 @@ class Trainer():
             perturbed_model = perturbed_model.half()
             noise_model = noise_model.half()
         ave_delta = .1
-        opt = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 1e-2)
-        # opt = torch.optim.SGD(self.model.parameters(), lr=self.lr)
+        opt = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 1e-3)
+        # opt = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=0)
 
 
 
@@ -84,9 +84,8 @@ class Trainer():
 
                     total_game_length += add_turns.sum() + sub_turns.sum()
                     total_cards += add_cards + sub_cards
-                    total_points += add_points + sub_points
+                    total_points += add_points + sub_points - init_score * 4 * self.batch_size
                     reward_delta = sub_score - add_score
-
                     step_size = reward_delta / (ave_delta + 1e-5)
                     ave_delta = self.ave_delta_rate * ave_delta + (1 - self.ave_delta_rate) * abs(reward_delta)
 

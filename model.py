@@ -28,7 +28,7 @@ class Model(nn.Module):
     def __init__(self, **kwargs):
         super(Model,self).__init__()
         self.half = kwargs.get("half",True)
-        self.memory_size=kwargs.get("memory_size",512)
+        self.memory_size=kwargs.get("memory_size",32)
         pass
 
     def get_action(self, input, memory):
@@ -80,9 +80,10 @@ class DenseNet(Model):
 
     def __init__(self, **kwargs):
         super(DenseNet, self).__init__(**kwargs)
-        layer_sizes = kwargs.get("layer_sizes", [1024] * 3)
+        layer_sizes = kwargs.get("layer_sizes", [4096] * 2)
         layers = []
         s = input_size + self.memory_size + aux_size
+        # s = input_size + self.memory_size
         for t in layer_sizes:
             layers += [nn.Linear(s,t)]
             layers += [nn.ReLU(inplace=True)]
@@ -125,19 +126,18 @@ class TransformerNet(Model):
         layer_sizes = kwargs.get("layer_sizes", [1024] * 3)
         layers = []
         s = input_size + self.memory_size + aux_size
+        s = input_size + self.memory_size
         self.pre_transform = nn.Linear(s, self.transformer_input_size*self.transformer_length)
         layers += [nn.ReLU(inplace=True)]
-        layers += [torch.nn.TransformerEncoderLayer(self.transformer_input_size, transformer_heads,
+        layers += [nn.TransformerEncoderLayer(self.transformer_input_size, transformer_heads,
                                                     dim_feedforward=512, dropout=0, activation='relu')]
 
 
         self.layers = nn.Sequential(*layers)
-        self.output = nn
         self.output_0 = nn.Linear(self.matrix_size, action_size)
         self.output_1 = nn.Linear(self.matrix_size, discard_size)
         self.output_2 = nn.Linear(self.matrix_size, noble_size)
         self.output_memory = nn.Linear(self.matrix_size, self.memory_size)
-        self.apply(init_weights)
 
 
 
@@ -146,11 +146,11 @@ class TransformerNet(Model):
         if memory is None:
             memory = torch.zeros(input.size(0), self.memory_size, device=cuda_device)
         if self.output_0.weight.dtype == torch.float16:
-            aug_input = torch.cat((input.half(), aux.half(), memory.half()), dim=1)
-            # aug_input = torch.cat((input.half(), memory.half()), dim=1)
+            # aug_input = torch.cat((input.half(), aux.half(), memory.half()), dim=1)
+            aug_input = torch.cat((input.half(), memory.half()), dim=1)
         else:
-            aug_input = torch.cat((input.float(), aux.float(), memory), dim=1)
-            # aug_input = torch.cat((input.float(), memory), dim=1)
+            # aug_input = torch.cat((input.float(), aux.float(), memory), dim=1)
+            aug_input = torch.cat((input.float(), memory), dim=1)
         features = self.pre_transform.forward(aug_input)
         features = self.layers.forward(features.view(-1,self.transformer_length,self.transformer_input_size))
         action = self.output_0.forward(features.view(-1,self.matrix_size))

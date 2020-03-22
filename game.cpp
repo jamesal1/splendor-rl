@@ -467,18 +467,16 @@ int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::
             }
 //            auto stalemate = state[TURN] > MAX_TURNS -  1 || (state[TURN] > FIRST_CARD && (p1_cards == 0 || p2_cards == 0));
             auto stalemate = state[TURN] > MAX_TURNS -  1 ;
-            if (p1_score > 20 || p2_score > 20 || stalemate) {
+            if (p1_score > 20 || p2_score > 20) {
                 if (p1_score > p2_score) {
                     state[RESULT] = 1;
                 } else if (p1_score < p2_score) {
                     state[RESULT] = -1;
                 } else {
-                    if (stalemate) {
-                        state[RESULT] = p1_cards > p2_cards ? 1 : p1_cards < p2_cards ? -1 : 4;
-                    } else {
-                        state[RESULT] = p1_cards > p2_cards ? -1 : p1_cards < p2_cards ? 1 : 3;
-                    }
+                    state[RESULT] = p1_cards > p2_cards ? -1 : p1_cards < p2_cards ? 1 : 3;
                 }
+            } else if (stalemate) {
+                state[RESULT] = p1_cards > p2_cards ? 1 : p1_cards < p2_cards ? -1 : 4;
             }
         }
 
