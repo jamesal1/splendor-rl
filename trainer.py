@@ -6,11 +6,15 @@ import shutil
 import torch
 import environment
 import random
-random.seed(1)
-torch.manual_seed(1)
+from constants import cuda_on
+random.seed(2)
+torch.manual_seed(2)
+import time
 
-
-cuda_device = torch.device("cuda")
+if cuda_on:
+    cuda_device = torch.device("cuda")
+else:
+    cuda_device = torch.device("cpu")
 
 class Trainer():
 
@@ -30,81 +34,78 @@ class Trainer():
             dst = os.path.join(self.log_dir, f)
             shutil.copyfile(src, dst)
         self.model = my_model
-        self.noise_scale = kwargs.get("noise_scale", 1e-7)
+        self.noise_scale = kwargs.get("noise_scale", 1e-3)
         # self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 1e-3)
         self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 0)
-        self.lr = kwargs.get("lr", 1e-4)
+        self.lr = kwargs.get("lr", 1e-1)
         # self.lr_decay = kwargs.get("lr_decay", 1e-2)
         self.ave_delta_rate = kwargs.get("ave_delta_rate", .999)
         self.epochs = kwargs.get("epochs", 1000)
-        self.batches_per_epoch = kwargs.get("batches_per_epoch",10)
-        self.batch_size = kwargs.get("batch_size",16)
+        self.batches_per_epoch = kwargs.get("batches_per_epoch",100)
+        self.batch_size = kwargs.get("batch_size",1)
         self.half = kwargs.get("half", 0)
 
     def train(self):
-        perturbed_model = type(self.model)().cuda()
-        noise_model = type(self.model)().cuda()
+        self.model.batch_size=self.batch_size
         if self.half:
             self.model = self.model.half()
-            perturbed_model = perturbed_model.half()
-            noise_model = noise_model.half()
+        perturbed_model = model.PerturbedModel(self.model)
         ave_delta = .1
-        opt = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 1e-3)
+        opt = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 1e-3, eps=1e-3)
         # opt = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=0)
 
 
 
         for epoch in range(self.epochs):
+            print("Epoch:",epoch)
             total_reward = 0.0
             total_game_length = 0.0
             total_cards = 0.0
             total_points = 0.0
             for _ in trange(self.batches_per_epoch):
-                perturbed_model.load_state_dict(self.model.state_dict())
                 perturbed_player = random.randrange(2)
                 player_1, player_2 = (self.model, perturbed_model) if perturbed_player else (perturbed_model, self.model)
                 init_score = 6 * random.randrange(2)
                 top = random.randrange(2)
 
                 with torch.no_grad():
-                    #based on https://github.com/kayuksel/pytorch-ars/blob/master/ars_multiprocess.py
-                    for p_param, n_param in zip(perturbed_model.parameters(), noise_model.parameters()):
-                        n_param.data.normal_(std=self.noise_scale)
-                        p_param.add_(n_param.data)
+                    perturbed_model.set_seed()
+                    perturbed_model.perturb(self.noise_scale)
 
-                    add_result, add_turns, add_cards, add_points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
+                    result, turns, cards, points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
+                    if cuda_on:
+                        result = result[perturbed_player].cuda().float()
+                    else:
+                        result = result[perturbed_player].float()
+                    total_reward += result.mean()
 
-                    add_score = add_result[perturbed_player].sum()/self.batch_size
-                    for p_param, n_param in zip(perturbed_model.parameters(), noise_model.parameters()):
-                        p_param.sub_(2 * n_param.data)
 
-                    sub_result, sub_turns, sub_cards, sub_points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
-                    sub_score = sub_result[perturbed_player].sum()/self.batch_size
-                    total_reward += add_score + sub_score
 
-                    total_game_length += add_turns.sum() + sub_turns.sum()
-                    total_cards += add_cards + sub_cards
-                    total_points += add_points + sub_points - init_score * 4 * self.batch_size
-                    reward_delta = sub_score - add_score
+                    total_game_length += turns.sum()
+                    total_cards += cards.sum()
+                    total_points += points.sum() - init_score * 2 * self.batch_size
+
+                    reward_delta = result[self.batch_size//2:] - result[:self.batch_size//2]
                     step_size = reward_delta / (ave_delta + 1e-5)
-                    ave_delta = self.ave_delta_rate * ave_delta + (1 - self.ave_delta_rate) * abs(reward_delta)
+                    ave_delta = self.ave_delta_rate * ave_delta + (1 - self.ave_delta_rate) * (reward_delta.norm(p=1))
 
-                for param, n_param in zip(self.model.parameters(), noise_model.parameters()):
-                    param.grad = ((step_size / self.noise_scale) * n_param.data)
-
+                    perturbed_model.set_noise(self.noise_scale)
+                perturbed_model.set_grad(step_size)
                 self.noise_scale *= self.noise_scale_decay
                 opt.step()
             # for param in self.model.parameters():
             #     print ((param.data**2).mean())
-            print("Average Reward:", total_reward / (2 * self.batches_per_epoch))
-            print("Average Game Length:", total_game_length.float() / (2 * self.batches_per_epoch * self.batch_size))
-            print("Average Cards:", total_cards.float() / (2 * self.batches_per_epoch * self.batch_size))
-            print("Average Points:", total_points.float() / (2 * self.batches_per_epoch * self.batch_size))
+            print("Average Reward:", total_reward / (self.batches_per_epoch))
+            print("Average Game Length:", total_game_length.float() / (self.batches_per_epoch * self.batch_size))
+            print("Average Cards:", total_cards.float() / (self.batches_per_epoch * self.batch_size))
+            print("Average Points:", total_points.float() / (self.batches_per_epoch * self.batch_size))
             fname = os.path.join(self.checkpoints_dir, "epoch_"+str(epoch)+".pkl")
+            perturbed_model.clear_noise()
             torch.save(self.model, fname)
 
 
-
+    def train_ppo(self):
+        pass
 
 def no_grad_test():
     import time
@@ -119,5 +120,9 @@ def no_grad_test():
 
 
 if __name__ == "__main__":
-    Trainer(model.TransformerNet().cuda()).train()
-    # Trainer(model.DenseNet().cuda()).train()
+    batch_size = 128
+    my_model = model.DenseNet(batch_size=batch_size)
+    # Trainer(model.TransformerNet()).train()
+    if cuda_on:
+        my_model = my_model.cuda()
+    Trainer(my_model,batch_size=batch_size).train()

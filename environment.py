@@ -5,12 +5,66 @@ from constants import *
 import random
 import time
 
+import gym, ray
+
+
+
+#
+# class SplendorEnv(ray.MultiAgentEnv):
+#
+#     def __init__(self,**kwargs):
+#         super(SplendorEnv,self).__init__()
+#         self.batch_size = kwargs.get("batch_size",1)
+#         self.set_game_options()
+#
+#
+#     def set_game_options(self,init_score = 6, top = False):
+#         self.init_score = init_score
+#         self.top = top
+#
+#
+#
+#     def reset(self):
+#         self.turn = 0
+#         self.decks = game_cpp.init_decks(self.batch_size, random.randrange(1000000000))
+#         self.states = torch.zeros([self.batch_size, 492], dtype=torch.int8)
+#         game_cpp.init_states(self.states, self.decks, self.init_score, random.randrange(1000000000))
+#         return {"p1":get_view(self.states, self.turn, self.top)}
+#
+#
+#     def step(self, action_dict):
+#         player = self.turn % 2
+#         action, discard, noble = action_dict["p2" if player else "p1"]
+#         changed = game_cpp.advance(self.states, self.decks, action, discard, noble)
+#         self.turn += 1
+#         if changed:
+#             obs = {"p1" if player else "p2": get_view(self.states,self.turn,self.top)}
+#             return obs, {}, {"__all__":False}, {}
+#         else:
+#             res1,res2 = parse_results(self.states)
+#             return {}, {"p1": res1, "p2":res2}, {"__all__":True}, {}
+
+
+
+#
+#
+#
+# class MyEnv(gym.Env):
+#     def __init__(self, env_config):
+#         self.action_space = <gym.Space>
+#         self.observation_space = <gym.Space>
+#     def reset(self):
+#         return <obs>
+#     def step(self, action):
+#         return <obs>, <reward: float>, <done: bool>, <info: dict>
 
 
 
 
 def get_view(states,turn,top=False):
-    cuda_states = states[:, :RESULT].cuda()
+    cuda_states = states[:, :RESULT]
+    if cuda_on:
+        cuda_states=cuda_states.cuda()
     player = turn % 2
     player_offset, other_player_offset = (PLAYER_2,PLAYER_1) if player else (PLAYER_1, PLAYER_2)
     view = torch.cat((cuda_states[:, player_offset:player_offset+PLAYER_LENGTH],
@@ -22,41 +76,40 @@ def get_view(states,turn,top=False):
     return view
 
 def parse_results(results):
-    ret1 = []
-    ret2 = []
-    # print(results)
-    for r in results:
-        if r == 1:
-            ret1 += [1.]
-            ret2 += [0.]
-        elif r == -1:
-            ret1 += [0.]
-            ret2 += [1.]
-        elif r == 2:
-            ret1 += [1.]
-            ret2 += [0.]
-        elif r == -2:
-            ret1 += [0.]
-            ret2 += [1.]
-        elif r == 3:
-            ret1 += [.5]
-            ret2 += [.5]
-        elif r == 4:
-            ret1 += [0]
-            ret2 += [0]
-    return torch.tensor(ret1).cuda(), torch.tensor(ret2).cuda()
+    start = time.time()
+    p1_cards = results[:, PLAYER_1 + CARDS: PLAYER_1 + CARDS + 5].sum(dim=1)
+    p2_cards = results[:, PLAYER_2 + CARDS: PLAYER_2 + CARDS + 5].sum(dim=1)
+    total_cards = p1_cards + p2_cards + 1.0
+    r = results[:,RESULT]
+    # print(r)
+    ret2 = (r<0).float() + (r==3).float() * .5
+    stalemate = (r==4).float()
+    ret1 = 1 - ret2 - stalemate
+    # ret1 += stalemate * p1_cards / total_cards
+    # ret2 += stalemate * p2_cards / total_cards
+    # return ret1,ret2
+    p1_gold = results[:,GOLD]
+    p2_gold = results[:,PLAYER_2+GOLD]
+    # return p1_gold, p2_gold
+    length = -results[:,TURN]/90.0
+    return length,length
 
 
 def run(model_1, model_2, size, init_score=6, top=False):
     decks = game_cpp.init_decks(size, random.randrange(1000000000))
     states = torch.zeros([size, 492], dtype=torch.int8)
     game_cpp.init_states(states, decks, init_score, random.randrange(1000000000))
+    # decks = game_cpp.init_decks(size, 0)
+    # states = torch.zeros([size, 492], dtype=torch.int8)
+    # game_cpp.init_states(states, decks, init_score, 0)
     turn = 0
     changed = 1
     p1_memory = None
     p2_memory = None
     while changed:
+        start = time.time()
         view = get_view(states, turn, top)
+        # print ("viewtime:", time.time() - start)
         start = time.time()
         actions, discards, nobles, p1_memory = model_1.get_action(view, p1_memory)
         # print ("nntime:",time.time() - start)
@@ -65,12 +118,16 @@ def run(model_1, model_2, size, init_score=6, top=False):
         # print("advtime:", time.time() - start)
         turn += 1
         view = get_view(states, turn, top)
+        start = time.time()
         actions, discards, nobles, p2_memory = model_2.get_action(view, p2_memory)
+        # print ("nntime:",time.time() - start)
+        start = time.time()
         changed = game_cpp.advance(states, decks, actions.byte().cpu(), discards.byte().cpu(), nobles.byte().cpu())
+        # print("advtime:", time.time() - start)
         turn += 1
         if turn>100:
             print("stuck")
-    return parse_results(states[:, RESULT].tolist()), \
-        states[:, TURN].cuda(), \
+    return parse_results(states), \
+        states[:,TURN], \
         states[:,CARDS:CARDS+5].sum() + states[:,PLAYER_2+CARDS:PLAYER_2+CARDS+5].sum(), \
         states[:,SCORE].sum() + states[:,PLAYER_2+SCORE].sum()

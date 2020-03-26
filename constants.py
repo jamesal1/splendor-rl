@@ -1,3 +1,5 @@
+cuda_on = 1
+
 LEVEL = 0
 COST = 1
 POINTS = 6

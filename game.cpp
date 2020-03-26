@@ -5,6 +5,9 @@
 #include <cstdlib>
 #include <experimental/iterator>
 #include <random>
+#include <thread>
+
+
 
 typedef std::vector<std::vector<int>> Array2d;
 
@@ -476,7 +479,8 @@ int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::
                     state[RESULT] = p1_cards > p2_cards ? -1 : p1_cards < p2_cards ? 1 : 3;
                 }
             } else if (stalemate) {
-                state[RESULT] = p1_cards > p2_cards ? 1 : p1_cards < p2_cards ? -1 : 4;
+//                state[RESULT] = p1_cards > p2_cards ? 1 : p1_cards < p2_cards ? -1 : 4;
+                state[RESULT] = 4;
             }
         }
 
@@ -489,9 +493,276 @@ int advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::
     return games_unfinished;
 }
 
+//struct arg_advance {
+//    torch::Tensor states;
+//    Array2d decks;
+//    torch::Tensor actions;
+//    torch::Tensor discards;
+//    torch::Tensor nobles;
+//    int start;
+//    int end;
+//    int changed;
+//};
+//
+//void* thread_advance(void *arguments) {
+//    struct arg_advance *args = (struct arg_advance *)arguments;
+//    printf("no\n");
+//    auto statesd = args->states.accessor<signed char,2>();
+//
+//    auto decks = args->decks;
+//    auto actionsd = args->actions.accessor<unsigned char,1>();
+//    auto discardsd = args->discards.accessor<unsigned char,2>();
+//    auto noblesd = args->nobles.accessor<unsigned char,1>();
+//    printf("ok\n");
+//    int games_unfinished = 0;
+//    for (int i = args->start; i < args->end; i++) {
+//        auto state = statesd[i];
+//        if (state[RESULT]) {
+//            continue;
+//        }
+//        int player = (state[TURN] %  2);
+//        state[TURN]++;
+//        int player_offset = player * PLAYER_2 + (1 - player) * PLAYER_1;
+//        int replace_card = -1;
+//        int replace_top = -1;
+//        std::vector<int> deck;
+//        auto action = actionsd[i];
+//        if (action < TAKE_END) {
+//            auto chips = TAKE_INFO[action];
+//            for (int color = 0; color < 5; color++) {
+//                state[player_offset + CHIPS + color] += chips[color];
+//                if (state[PLAYER_1 + CHIPS + color] + state[PLAYER_2 + CHIPS + color] > 4) {
+//                    state[RESULT] = player ? 2:-2;
+//                }
+//            }
+//        } else if (action < TAKE2_END) {
+//            int color = action - TAKE2_START;
+//            if (state[PLAYER_1 + CHIPS + color] + state[PLAYER_2 + CHIPS + color]) {
+//                state[RESULT] = player ? 2:-2;
+//            } else {
+//                state[player_offset + CHIPS + color] += 2;
+//            }
+//        } else if (action < RESERVE_TOP_END) {
+//            int card;
+//            if (action < RESERVE_END) {
+//                card = action - RESERVE_START;
+//                if (state[PLAY + card]) {
+//                    replace_card = card;
+//                    state[DEAD + card] = 1;
+//                } else {
+//                    state[RESULT] = player ? 2:-2;
+//                }
+//            } else {
+//                int level = action - RESERVE_TOP_START;
+//                deck = decks.at(3 * i + level);
+//                if (deck.size()) {
+//                    card = deck.back();
+//                    replace_top = card;
+//                } else {
+//                    state[RESULT] = player ? 2:-2;
+//                }
+//            }
+//            if (state[player_offset + L1_RESERVED] + state[player_offset + L2_RESERVED] +
+//              state[player_offset + L3_RESERVED] < 3 ) {
+//                state[player_offset + RESERVED + card] = 1;
+//                if (card < L1_END) {
+//                    state[player_offset + L1_RESERVED]++;
+//                } else if (card < L2_END) {
+//                    state[player_offset + L2_RESERVED]++;
+//                } else {
+//                    state[player_offset + L3_RESERVED]++;
+//                }
+//                if (state[PLAYER_1 + GOLD] + state[PLAYER_2 + GOLD] < 5) {
+//                    state[player_offset + GOLD]++;
+//                }
+//            } else {
+//                state[RESULT] = player ? 2:-2;
+//            }
+//        } else {
+//            int card = action - PURCHASE_START;
+//            if (state[PLAY + card]) {
+//                replace_card = card;
+//            } else if (state[player_offset + RESERVED + card]) {
+//                int level = card < L1_END ? 0 : card < L2_END ? 1 : 2;
+//                state[player_offset + RESERVED + card] = 0;
+//                state[player_offset + L1_RESERVED + level]--;
+//            } else {
+//                state[RESULT] = player ? 2:-2;
+//            }
+//            int gold_cost = 0;
+//            auto card_info = CARD_INFO[card];
+//            for (int color = 0; color < 5; color++) {
+//                int cost = card_info[COST + color] - state[player_offset + CARDS + color];
+//                if (cost > 0) {
+//                    int chip = state[player_offset + CHIPS + color];
+//                    if (cost > chip) {
+//                        state[player_offset + CHIPS + color] = 0;
+//                        gold_cost += cost - chip;
+//                    } else {
+//                        state[player_offset + CHIPS + color] -= cost;
+//                    }
+//                }
+//                state[player_offset + CARDS + color] += card_info[COLOR + color];
+//            }
+//            state[player_offset + SCORE] += card_info[POINTS];
+//            state[player_offset + GOLD] -= gold_cost;
+//            state[DEAD + card] = 1;
+//            if (state[player_offset + GOLD] < 0) {
+//                state[RESULT] = player ? 2:-2;
+//            }
+//        }
+//
+//        if (replace_card>-1) {
+//            int level = replace_card < L1_END ? 0 : replace_card < L2_END ? 1 : 2;
+//            deck = decks.at(3 * i + level);
+//            state[PLAY + replace_card] = 0;
+//            if (deck.size()) {
+//                state[PLAY + deck.back()] = 1;
+//                replace_top = deck.back();
+//            }
+//
+//        }
+//
+//        if (replace_top>-1) {
+//            state[TOP + replace_top] = 0;
+//            deck.pop_back();
+//            if (deck.size()) {
+//                state[TOP + deck.back()] = 1;
+//            }
+//        }
+//
+//        int total_chips = state[player_offset + GOLD];
+//        for (int color = 0; color < 5; color++) {
+//            total_chips += state[player_offset + CHIPS + color];
+//        }
+//        int chip_count;
+//        auto discard = discardsd[i];
+//        switch (total_chips) {
+//            case 13:
+//                chip_count = state[player_offset + CHIPS + discard[2]];
+//                if (chip_count) {
+//                    state[player_offset + CHIPS + discard[2]] = chip_count - 1;
+//                } else {
+//                    state[RESULT] = player ? 2:-2;
+//                }
+//            case 12:
+//                chip_count = state[player_offset + CHIPS + discard[1]];
+//                if (chip_count) {
+//                    state[player_offset + CHIPS + discard[1]] = chip_count - 1;
+//                } else {
+//                    state[RESULT] = player ? 2:-2;
+//                }
+//            case 11:
+//                chip_count = state[player_offset + CHIPS + discard[0]];
+//                if (chip_count) {
+//                    state[player_offset + CHIPS + discard[0]] = chip_count - 1;
+//                } else {
+//                    state[RESULT] = player ? 2:-2;
+//                }
+//        }
+//        auto noble = noblesd[i];
+//        int satisfies=0;
+//        if (state[NOBLES + noble]) {
+//            satisfies = 1;
+//            for (int color = 0; color < 5; color++) {
+//                if (state[player_offset + CARDS + color] < NOBLE_INFO[noble][color]) {
+//                    satisfies = 0;
+//                    break;
+//                }
+//            }
+//        }
+//        if (satisfies) {
+//            state[player_offset + SCORE] += 3;
+//            state[NOBLES + noble] = 0;
+//        } else {
+//            for (int nob = 0; nob < 10; nob++) {
+//                if (state[NOBLES + nob]) {
+//                    satisfies = 1;
+//                    for (int color = 0; color < 5; color++) {
+//                        if (state[player_offset + CARDS + color] < NOBLE_INFO[nob][color]) {
+//                            satisfies = 0;
+//                            break;
+//                        }
+//                    }
+//                    if (satisfies) {
+//                        state[RESULT] = player ? 2:-2;
+//                        break;
+//                    }
+//                }
+//
+//            }
+//        }
+//
+//        if (player && state[RESULT] == 0) {
+//            auto p1_score = state[PLAYER_1 + SCORE];
+//            auto p2_score = state[PLAYER_2 + SCORE];
+//
+//            int p1_cards = 0;
+//            int p2_cards = 0;
+//            for (int color = 0; color < 5; color++) {
+//             p1_cards += state[PLAYER_1 + CARDS + color];
+//             p2_cards += state[PLAYER_2 + CARDS + color];
+//            }
+////            auto stalemate = state[TURN] > MAX_TURNS -  1 || (state[TURN] > FIRST_CARD && (p1_cards == 0 || p2_cards == 0));
+//            auto stalemate = state[TURN] > MAX_TURNS -  1 ;
+//            if (p1_score > 20 || p2_score > 20) {
+//                if (p1_score > p2_score) {
+//                    state[RESULT] = 1;
+//                } else if (p1_score < p2_score) {
+//                    state[RESULT] = -1;
+//                } else {
+//                    state[RESULT] = p1_cards > p2_cards ? -1 : p1_cards < p2_cards ? 1 : 3;
+//                }
+//            } else if (stalemate) {
+////                state[RESULT] = p1_cards > p2_cards ? 1 : p1_cards < p2_cards ? -1 : 4;
+//                state[RESULT] = 4;
+//            }
+//        }
+//
+//
+//        if (state[RESULT]==0) {
+//            games_unfinished++;
+//        }
+//
+//    }
+//    (args->changed)+=games_unfinished;
+//}
+//int parallel_advance(torch::Tensor states, Array2d decks,  torch::Tensor actions, torch::Tensor discards, torch::Tensor nobles) {
+//    int MAX_THREAD = 1;
+//    pthread_t threads[MAX_THREAD];
+//    int len = states.size(0)/4;
+//    int changed = 0;
+//    struct arg_advance args[MAX_THREAD];
+//    for (int i = 0; i < MAX_THREAD; i++) {
+////            struct arg_advance *args =(struct arg_advance *) malloc(sizeof(struct arg_advance));
+//            args->states = states;
+//            args->decks = decks;
+//            args->actions = actions;
+//            args->discards = discards;
+//            args->nobles = nobles;
+//            args->start = len * i;
+//            args->end = len * (i+1);
+//            args->changed = 0;
+//            pthread_create(&threads[i], NULL, thread_advance, (void *)&args[i]);
+//    }
+//
+//       for (int i = 0; i < MAX_THREAD; i++) {
+//           pthread_join(threads[i], NULL);
+//           changed+=args[i].changed;
+//       }
+//
+//       return changed;
+//}
+
+
+
+
+
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("advance", &advance, "advance");
+//    m.def("parallel_advance",&parallel_advance,"parallel_advance"); // can't create more than one accessor and some result is wrong
     m.def("init_decks", &init_decks, "init_decks");
     m.def("init_states", &init_states, "init_states");
     m.def("test_vector", &test_vector, "test_vector");
