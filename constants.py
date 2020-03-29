@@ -1,4 +1,6 @@
 cuda_on = 1
+cores = 4
+
 
 LEVEL = 0
 COST = 1

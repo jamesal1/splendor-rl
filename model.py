@@ -29,13 +29,19 @@ def resource_mask(states):
 
 
 
+class CubeAct(nn.Module):
+
+
+    def forward(self,x):
+
+        return x ** 3
+
+
 class PerturbedLinear(nn.Linear):
 
-
-    def __init__(self, in_features,out_features, batch_size, perturbed_flag, bias=True):
+    def __init__(self, in_features, out_features, directions, perturbed_flag, bias=True):
         super(PerturbedLinear, self).__init__(in_features,out_features,bias)
-        assert batch_size % 2 == 0
-        self.batch_size = batch_size
+        self.directions = directions
         self.in_features = in_features
         self.out_features = out_features
         self.perturbed_weight = None
@@ -46,9 +52,9 @@ class PerturbedLinear(nn.Linear):
 
     def set_seed(self, seed=None):
         if self.perturbed_weight is None:
-            self.perturbed_weight = torch.zeros(self.batch_size, self.out_features, self.in_features, device=cuda_device)
+            self.perturbed_weight = torch.zeros(2 * self.directions, self.out_features, self.in_features, device=cuda_device)
         if self.bias is not None and self.perturbed_bias is None:
-            self.perturbed_bias = torch.zeros(self.batch_size, self.out_features, device=cuda_device)
+            self.perturbed_bias = torch.zeros(2 * self.directions, self.out_features, device=cuda_device)
         self.seed = seed if seed is not None else random.randrange(1000000000)
 
 
@@ -56,29 +62,28 @@ class PerturbedLinear(nn.Linear):
 
     def set_noise(self, noise_scale):
         gen = torch.cuda.manual_seed(self.seed)
-        self.perturbed_weight[:self.batch_size // 2].normal_(std = noise_scale, generator=gen)
+        self.perturbed_weight[:self.directions].normal_(std=noise_scale, generator=gen)
         if self.bias is not None:
-            self.perturbed_bias[:self.batch_size // 2].normal_(std = noise_scale, generator=gen)
+            self.perturbed_bias[:self.directions].normal_(std=noise_scale, generator=gen)
 
     def perturb(self, noise_scale):
         self.set_noise(noise_scale)
-        self.perturbed_weight[self.batch_size // 2:] = - self.perturbed_weight[:self.batch_size // 2]
+        self.perturbed_weight[self.directions:] = - self.perturbed_weight[:self.directions]
         self.perturbed_weight.add_(self.weight)
         if self.bias is not None:
-            self.perturbed_bias[self.batch_size // 2:] = - self.perturbed_bias[:self.batch_size // 2]
+            self.perturbed_bias[self.directions:] = - self.perturbed_bias[:self.directions]
             self.perturbed_bias.add_(self.bias)
             
     #very slightly faster than calling set noise but could possibly have precision issues
     def unperturb(self):
-        self.perturbed_weight.sub_(self.weight)
+        self.perturbed_weight[:self.directions].sub_(self.weight)
         if self.bias is not None:
-            self.perturbed_bias.sub_(self.bias)
+            self.perturbed_bias[:self.directions].sub_(self.bias)
 
     def set_grad(self, weights):
-        half_size = self.batch_size // 2
-        self.weight.grad = (self.perturbed_weight[:half_size] * weights.view(half_size, 1, 1)).sum(dim=0)
+        self.weight.grad = (self.perturbed_weight[:self.directions] * weights.view(self.directions, 1, 1)).sum(dim=0)
         if self.bias is not None:
-            self.bias.grad = (self.perturbed_bias[:half_size] * weights.view(half_size, 1)).sum(dim=0)
+            self.bias.grad = (self.perturbed_bias[:self.directions] * weights.view(self.directions, 1)).sum(dim=0)
 
 
     def clear_noise(self):
@@ -89,12 +94,11 @@ class PerturbedLinear(nn.Linear):
     def forward(self, input):
         if self.perturbed_flag[0]:
             if self.bias is not None:
-                return torch.baddbmm(self.perturbed_bias.view(self.batch_size, self.out_features, 1),
-                                     self.perturbed_weight,
-                                     input.view(self.batch_size, self.in_features, 1))
+                return torch.baddbmm(self.perturbed_bias.view(2 * self.directions, 1, self.out_features),
+                                     input.view(2 * self.directions, -1, self.in_features),
+                                     self.perturbed_weight.permute([0, 2, 1]))
             else:
-                return torch.bmm(self.perturbed_weight,
-                                 input.view(self.batch_size, self.in_features, 1))
+                return torch.bmm(input.view(2 * self.directions,-1, self.in_features), self.perturbed_weight.permute([0, 2, 1]))
         return F.linear(input, self.weight, self.bias)
 
 
@@ -127,9 +131,9 @@ class Model(nn.Module):
         #     take_mask = take_mask.float()
         aux = torch.cat((purchase_mask.bool(),take_mask),dim=1)
         action, discard, noble, memory = self.forward(input, aux, memory)
-        action = torch.exp(action - action.max()).view(-1,action_size)
-        discard = torch.exp(discard - discard.max()).view(-1, discard_size)
-        noble = torch.exp(noble - noble.max()).view(-1, noble_size)
+        action = (action - action.min()).view(-1,action_size)
+        discard = (discard - discard.min()).view(-1, discard_size)
+        noble = (noble - noble.min()).view(-1, noble_size)
         memory = memory.view(-1,self.memory_size)
         start = time.time()
 
@@ -184,21 +188,24 @@ class DenseNet(Model):
 
     def __init__(self, **kwargs):
         super(DenseNet, self).__init__(**kwargs)
-        layer_sizes = kwargs.get("layer_sizes", [1024] * 2)
-        batch_size = kwargs.get("batch_size")
+        layer_sizes = kwargs.get("layer_sizes", [1024])
+        directions = kwargs.get("directions")
         layers = []
         s = input_size + self.memory_size + aux_size
         # s = input_size + self.memory_size
 
         for t in layer_sizes:
-            layers += [PerturbedLinear(s,t, batch_size, self.perturbed_flag)]
-            layers += [nn.Tanh()]
+            layers += [PerturbedLinear(s,t, directions, self.perturbed_flag)]
+            # layers += [nn.BatchNorm1d(t)]
+            layers += [nn.ELU()]
+            # layers += [CubeAct()]
+
             s = t
         self.layers = nn.Sequential(*layers)
-        self.output_0 = PerturbedLinear(t, action_size, batch_size, self.perturbed_flag)
-        self.output_1 = PerturbedLinear(t, discard_size, batch_size, self.perturbed_flag)
-        self.output_2 = PerturbedLinear(t, noble_size, batch_size, self.perturbed_flag)
-        self.output_memory = PerturbedLinear(t, self.memory_size, batch_size, self.perturbed_flag)
+        self.output_0 = PerturbedLinear(t, action_size, directions, self.perturbed_flag)
+        self.output_1 = PerturbedLinear(t, discard_size, directions, self.perturbed_flag)
+        self.output_2 = PerturbedLinear(t, noble_size, directions, self.perturbed_flag)
+        self.output_memory = PerturbedLinear(t, self.memory_size, directions, self.perturbed_flag)
         self.apply(init_weights)
 
 

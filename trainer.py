@@ -34,15 +34,16 @@ class Trainer():
             dst = os.path.join(self.log_dir, f)
             shutil.copyfile(src, dst)
         self.model = my_model
-        self.noise_scale = kwargs.get("noise_scale", 1e-3)
+        self.noise_scale = kwargs.get("noise_scale", 3e-3)
         # self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 1e-3)
         self.noise_scale_decay = 1 - kwargs.get("noise_scale_decay", 0)
-        self.lr = kwargs.get("lr", 1e-1)
+        self.lr = kwargs.get("lr", 1e-3)
         # self.lr_decay = kwargs.get("lr_decay", 1e-2)
-        self.ave_delta_rate = kwargs.get("ave_delta_rate", .999)
+        self.ave_delta_rate = kwargs.get("ave_delta_rate", .99)
         self.epochs = kwargs.get("epochs", 1000)
         self.batches_per_epoch = kwargs.get("batches_per_epoch",100)
         self.batch_size = kwargs.get("batch_size",1)
+        self.directions = kwargs.get("directions",1)
         self.half = kwargs.get("half", 0)
 
     def train(self):
@@ -50,8 +51,8 @@ class Trainer():
         if self.half:
             self.model = self.model.half()
         perturbed_model = model.PerturbedModel(self.model)
-        ave_delta = .1
-        opt = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 1e-3, eps=1e-3)
+        ave_delta = .005 * self.batch_size
+        opt = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay = 0, eps=1e-3)
         # opt = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=0)
 
 
@@ -86,15 +87,19 @@ class Trainer():
                     total_points += points.sum() - init_score * 2 * self.batch_size
 
                     reward_delta = result[self.batch_size//2:] - result[:self.batch_size//2]
-                    step_size = reward_delta / (ave_delta + 1e-5)
+                    step_size = reward_delta.view(directions,-1).sum(dim=1) / ((ave_delta + 1e-5) * self.noise_scale)
                     ave_delta = self.ave_delta_rate * ave_delta + (1 - self.ave_delta_rate) * (reward_delta.norm(p=1))
-
+                    # step_size = reward_delta
                     perturbed_model.set_noise(self.noise_scale)
                 perturbed_model.set_grad(step_size)
+                # for param in self.model.parameters():
+                #     if param.grad is not None:
+                #         print(param.grad.abs().mean())
                 self.noise_scale *= self.noise_scale_decay
                 opt.step()
             # for param in self.model.parameters():
-            #     print ((param.data**2).mean())
+            #
+            #     print(param.data.abs().mean())
             print("Average Reward:", total_reward / (self.batches_per_epoch))
             print("Average Game Length:", total_game_length.float() / (self.batches_per_epoch * self.batch_size))
             print("Average Cards:", total_cards.float() / (self.batches_per_epoch * self.batch_size))
@@ -120,9 +125,10 @@ def no_grad_test():
 
 
 if __name__ == "__main__":
-    batch_size = 128
-    my_model = model.DenseNet(batch_size=batch_size)
+    batch_size = 512
+    directions = 64
+    my_model = model.DenseNet(directions=directions)
     # Trainer(model.TransformerNet()).train()
     if cuda_on:
         my_model = my_model.cuda()
-    Trainer(my_model,batch_size=batch_size).train()
+    Trainer(my_model,batch_size=batch_size,directions=directions).train()

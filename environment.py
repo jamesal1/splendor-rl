@@ -4,7 +4,7 @@ game_cpp = load(name="game_cpp", sources=["game.cpp"])
 from constants import *
 import random
 import time
-
+from threading import Thread
 import gym, ray
 
 
@@ -59,12 +59,32 @@ import gym, ray
 #         return <obs>, <reward: float>, <done: bool>, <info: dict>
 
 
+def parallel_advance(states, decks, actions, discards, nobles):
+    total = [0]
+    def help(i):
+        start = num * i
+        end = num * (i+1)
+        changed = game_cpp.advance(states[start:end], decks[3*start:3*end], actions[start:end], discards[start:end], nobles[start:end])
+        if changed:
+            total[0]+=changed
+    num = states.size(0)//cores
+    threads = []
+    for i in range(cores):
+        threads+=[Thread(target=help,args=(i,))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return total[0]
 
 
 def get_view(states,turn,top=False):
+    start = time.time()
     cuda_states = states[:, :RESULT]
+
     if cuda_on:
         cuda_states=cuda_states.cuda()
+    print("cuda_time",time.time()- start)
     player = turn % 2
     player_offset, other_player_offset = (PLAYER_2,PLAYER_1) if player else (PLAYER_1, PLAYER_2)
     view = torch.cat((cuda_states[:, player_offset:player_offset+PLAYER_LENGTH],
@@ -87,7 +107,9 @@ def parse_results(results):
     ret1 = 1 - ret2 - stalemate
     # ret1 += stalemate * p1_cards / total_cards
     # ret2 += stalemate * p2_cards / total_cards
-    # return ret1,ret2
+    ret1 += stalemate * p1_cards > p2_cards
+    ret2 += stalemate * p2_cards > p1_cards
+    return ret1,ret2
     p1_gold = results[:,GOLD]
     p2_gold = results[:,PLAYER_2+GOLD]
     # return p1_gold, p2_gold
@@ -96,7 +118,8 @@ def parse_results(results):
 
 
 def run(model_1, model_2, size, init_score=6, top=False):
-    decks = game_cpp.init_decks(size, random.randrange(1000000000))
+    decks = torch.zeros([size, 93]).byte()
+    game_cpp.init_decks(decks, random.randrange(1000000000))
     states = torch.zeros([size, 492], dtype=torch.int8)
     game_cpp.init_states(states, decks, init_score, random.randrange(1000000000))
     # decks = game_cpp.init_decks(size, 0)
@@ -109,21 +132,26 @@ def run(model_1, model_2, size, init_score=6, top=False):
     while changed:
         start = time.time()
         view = get_view(states, turn, top)
-        # print ("viewtime:", time.time() - start)
+        print ("viewtime:", time.time() - start)
         start = time.time()
         actions, discards, nobles, p1_memory = model_1.get_action(view, p1_memory)
-        # print ("nntime:",time.time() - start)
+        print ("nntime:",time.time() - start)
         start = time.time()
         game_cpp.advance(states, decks, actions.byte().cpu(), discards.byte().cpu(), nobles.byte().cpu())
-        # print("advtime:", time.time() - start)
+        # parallel_advance(states, decks, actions.byte().cpu(), discards.byte().cpu(), nobles.byte().cpu())
+        print("advtime:", time.time() - start)
         turn += 1
         view = get_view(states, turn, top)
         start = time.time()
         actions, discards, nobles, p2_memory = model_2.get_action(view, p2_memory)
-        # print ("nntime:",time.time() - start)
+        print ("nntime:",time.time() - start)
         start = time.time()
-        changed = game_cpp.advance(states, decks, actions.byte().cpu(), discards.byte().cpu(), nobles.byte().cpu())
-        # print("advtime:", time.time() - start)
+        actions, discards, nobles = actions.byte().cpu(), discards.byte().cpu(), nobles.byte().cpu()
+        print ("cputime:",time.time() - start)
+        start = time.time()
+        changed = game_cpp.advance(states, decks, actions, discards, nobles)
+        # changed = parallel_advance(states, decks, actions.byte().cpu(), discards.byte().cpu(), nobles.byte().cpu())
+        print("advtime:", time.time() - start)
         turn += 1
         if turn>100:
             print("stuck")
