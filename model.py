@@ -6,10 +6,17 @@ if cuda_on:
     cuda_device = torch.device("cuda")
 else:
     cuda_device = torch.device("cpu")
+
+if half_precision:
+    precision = torch.float16
+else:
+    precision = torch.float32
+
 import time
 
 from torch.nn.parameter import Parameter
 import random
+import time
 
 input_size = 401
 aux_size = 90 + 25
@@ -49,59 +56,73 @@ class PerturbedLinear(nn.Linear):
             self.perturbed_bias = None
         self.perturbed_flag = perturbed_flag
         self.set_seed()
+        self.neg_mask = None
+        self.noise_scale = None
 
     def set_seed(self, seed=None):
+        self.seed = seed if seed is not None else random.randrange(100000000)
+
+    def set_noise_scale(self, noise_scale):
+        self.noise_scale = noise_scale
+
+    def set_noise(self):
         if self.perturbed_weight is None:
-            self.perturbed_weight = torch.zeros(2 * self.directions, self.out_features, self.in_features, device=cuda_device)
-        if self.bias is not None and self.perturbed_bias is None:
-            self.perturbed_bias = torch.zeros(2 * self.directions, self.out_features, device=cuda_device)
-        self.seed = seed if seed is not None else random.randrange(1000000000)
+            gen = torch.cuda.manual_seed(self.seed)
+            self.perturbed_weight = torch.zeros(self.directions, self.out_features, self.in_features, device=cuda_device, dtype=precision)
+            self.perturbed_weight.normal_(std=self.noise_scale, generator=gen)
+            if self.bias is not None and self.perturbed_bias is None:
+                self.perturbed_bias = torch.zeros(self.directions, self.out_features, device=cuda_device, dtype=precision)
+                self.perturbed_bias.normal_(std=self.noise_scale, generator=gen)
 
 
 
-
-    def set_noise(self, noise_scale):
-        gen = torch.cuda.manual_seed(self.seed)
-        self.perturbed_weight[:self.directions].normal_(std=noise_scale, generator=gen)
-        if self.bias is not None:
-            self.perturbed_bias[:self.directions].normal_(std=noise_scale, generator=gen)
-
-    def perturb(self, noise_scale):
-        self.set_noise(noise_scale)
-        self.perturbed_weight[self.directions:] = - self.perturbed_weight[:self.directions]
-        self.perturbed_weight.add_(self.weight)
-        if self.bias is not None:
-            self.perturbed_bias[self.directions:] = - self.perturbed_bias[:self.directions]
-            self.perturbed_bias.add_(self.bias)
-            
-    #very slightly faster than calling set noise but could possibly have precision issues
-    def unperturb(self):
-        self.perturbed_weight[:self.directions].sub_(self.weight)
-        if self.bias is not None:
-            self.perturbed_bias[:self.directions].sub_(self.bias)
 
     def set_grad(self, weights):
-        self.weight.grad = (self.perturbed_weight[:self.directions] * weights.view(self.directions, 1, 1)).sum(dim=0)
+        if half_precision:
+            weights = weights.half()
+        self.set_noise()
+        self.weight.grad = (self.perturbed_weight * weights.view(self.directions, 1, 1)).sum(dim=0)
         if self.bias is not None:
-            self.bias.grad = (self.perturbed_bias[:self.directions] * weights.view(self.directions, 1)).sum(dim=0)
+            self.bias.grad = (self.perturbed_bias * weights.view(self.directions, 1)).sum(dim=0)
+        self.clear_noise()
 
 
     def clear_noise(self):
         self.perturbed_weight = None
         if self.bias is not None:
             self.perturbed_bias = None
+        # self.neg_mask = None
 
     def forward(self, input):
+        start = time.time()
+        unperturbed = F.linear(input, self.weight, self.bias)
+        # print("unperturbed",self.perturbed_flag[0], time.time() - start)
         if self.perturbed_flag[0]:
+            start = time.time()
+            self.set_noise()
+            # print("noise", time.time() - start)
+            batch_view_input = input.view(self.directions, -1, self.in_features)
+            repeat_size = batch_view_input.size(1)
+            start = time.time()
             if self.bias is not None:
-                return torch.baddbmm(self.perturbed_bias.view(2 * self.directions, 1, self.out_features),
-                                     input.view(2 * self.directions, -1, self.in_features),
-                                     self.perturbed_weight.permute([0, 2, 1]))
+                perturbations = torch.baddbmm(self.perturbed_bias.view(self.directions, 1, self.out_features),
+                                              batch_view_input,
+                                              self.perturbed_weight.permute([0, 2, 1]))
             else:
-                return torch.bmm(input.view(2 * self.directions,-1, self.in_features), self.perturbed_weight.permute([0, 2, 1]))
-        return F.linear(input, self.weight, self.bias)
-
-
+                perturbations = torch.bmm(batch_view_input, self.perturbed_weight.permute([0, 2, 1]))
+            # print("perturbed", time.time() - start)
+            # start = time.time()
+            if self.neg_mask is None or self.neg_mask.size(1)!=repeat_size:
+                self.neg_mask = torch.ones((1,repeat_size,1), device=cuda_device, dtype=precision)
+                self.neg_mask[:, repeat_size // 2:, :] *= -1
+            # print("negative", time.time() - start)
+            # start = time.time()
+            # add = (perturbations*self.neg_mask).view(*unperturbed.size()) + unperturbed
+            add = torch.addcmul(unperturbed.view(*perturbations.size()),perturbations,self.neg_mask).view(*unperturbed.size())
+            # print("add", time.time() - start)
+            # self.clear_noise()
+            return add
+        return unperturbed
 
 
 class Model(nn.Module):
@@ -109,13 +130,12 @@ class Model(nn.Module):
 
     def __init__(self, **kwargs):
         super(Model,self).__init__()
-        self.half_size = kwargs.get("half",0)
         self.memory_size=kwargs.get("memory_size",4)
         self.perturbed_flag = [0]
 
     def get_action(self, input, memory, perturbed=False):
         self.perturbed_flag[0] = perturbed
-        if self.half_size:
+        if half_precision:
             input = input.half()
         else:
             input = input.float()

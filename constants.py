@@ -1,4 +1,7 @@
 cuda_on = 1
+half_precision = 1
+
+
 cores = 4
 
 

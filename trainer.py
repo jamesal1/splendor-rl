@@ -6,7 +6,7 @@ import shutil
 import torch
 import environment
 import random
-from constants import cuda_on
+from constants import cuda_on, half_precision
 random.seed(2)
 torch.manual_seed(2)
 import time
@@ -41,14 +41,13 @@ class Trainer():
         # self.lr_decay = kwargs.get("lr_decay", 1e-2)
         self.ave_delta_rate = kwargs.get("ave_delta_rate", .99)
         self.epochs = kwargs.get("epochs", 1000)
-        self.batches_per_epoch = kwargs.get("batches_per_epoch",100)
+        self.batches_per_epoch = kwargs.get("batches_per_epoch",10)
         self.batch_size = kwargs.get("batch_size",1)
         self.directions = kwargs.get("directions",1)
-        self.half = kwargs.get("half", 0)
 
     def train(self):
         self.model.batch_size=self.batch_size
-        if self.half:
+        if half_precision:
             self.model = self.model.half()
         perturbed_model = model.PerturbedModel(self.model)
         ave_delta = .005 * self.batch_size
@@ -71,7 +70,7 @@ class Trainer():
 
                 with torch.no_grad():
                     perturbed_model.set_seed()
-                    perturbed_model.perturb(self.noise_scale)
+                    perturbed_model.set_noise_scale(self.noise_scale)
 
                     result, turns, cards, points = environment.run(player_1, player_2, size=self.batch_size, init_score=init_score, top=top)
                     if cuda_on:
@@ -85,12 +84,11 @@ class Trainer():
                     total_game_length += turns.sum()
                     total_cards += cards.sum()
                     total_points += points.sum() - init_score * 2 * self.batch_size
-
-                    reward_delta = result[self.batch_size//2:] - result[:self.batch_size//2]
-                    step_size = reward_delta.view(directions,-1).sum(dim=1) / ((ave_delta + 1e-5) * self.noise_scale)
+                    result = result.view(self.directions, -1)
+                    repeat_size = result.size(1)
+                    reward_delta = result[:, repeat_size // 2:].sum(dim=1) - result[:, :repeat_size // 2].sum(dim=1)
+                    step_size = reward_delta / ((ave_delta + 1e-5) * self.noise_scale)
                     ave_delta = self.ave_delta_rate * ave_delta + (1 - self.ave_delta_rate) * (reward_delta.norm(p=1))
-                    # step_size = reward_delta
-                    perturbed_model.set_noise(self.noise_scale)
                 perturbed_model.set_grad(step_size)
                 # for param in self.model.parameters():
                 #     if param.grad is not None:
@@ -125,8 +123,8 @@ def no_grad_test():
 
 
 if __name__ == "__main__":
-    batch_size = 512
-    directions = 64
+    batch_size = 8192
+    directions = 2048
     my_model = model.DenseNet(directions=directions)
     # Trainer(model.TransformerNet()).train()
     if cuda_on:
